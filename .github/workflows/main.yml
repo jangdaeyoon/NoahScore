@@ -1,1 +1,28 @@
-﻿
+name: NoahScore APK 빌드
+on:
+  push:
+    branches: [ "main" ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+      - name: 자바 설치
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      - name: 플러터 공장 가동
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+      - name: 안방(Skills/NoahScore)으로 이동 후 패키지 설치
+        run: cd Skills/NoahScore && flutter pub get
+      - name: Gemini 지능 주입 및 APK 굽기
+        run: cd Skills/NoahScore && flutter build apk --release --dart-define=GEMINI_API_KEY=${{ secrets.GOOGLE_API_KEY }}
+      - name: 완성품 배달
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: Skills/NoahScore/build/app/outputs/flutter-apk/app-release.apk
