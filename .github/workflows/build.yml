@@ -17,18 +17,16 @@ jobs:
       run: |
         flutter create noah_score_app
         cp Skills/NoahScore/main.dart noah_score_app/lib/main.dart
-    - name: 4. 필수 라이브러리 혈관 주입 (intl, firebase_core 추가)
+    - name: 4. 필수 라이브러리 주입 (webview_flutter 추가)
       run: |
         cd noah_score_app
-        flutter pub add http collection intl firebase_core
+        # 여기에 webview_flutter를 추가했습니다!
+        flutter pub add http collection intl firebase_core webview_flutter
         flutter pub get
     - name: 5. 안드로이드 필수 설정 (인터넷, SDK 21, 코틀린 1.8.22 상향)
       run: |
-        # 1. 인터넷 권한 주입
         sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>' noah_score_app/android/app/src/main/AndroidManifest.xml
-        # 2. Firebase 호환을 위해 최소 안드로이드 버전을 21로 강제 상향
         sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' noah_score_app/android/app/build.gradle
-        # 3. 코틀린 버전 충돌(Duplicate class) 해결을 위해 1.7.10 -> 1.8.22로 강제 상향
         sed -i 's/1.7.10/1.8.22/g' noah_score_app/android/settings.gradle || true
         sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '\''1.8.22'\''/g' noah_score_app/android/build.gradle || true
     - name: 6. APK 최종 컴파일 (Gemini API 키 주입)
