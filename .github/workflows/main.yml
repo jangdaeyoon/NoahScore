@@ -17,12 +17,12 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-      - name: 안방(Skills/NoahScore)으로 이동 후 패키지 설치
-        run: cd Skills/NoahScore && flutter pub get
+      - name: 패키지 설치 (루트 경로)
+        run: flutter pub get
       - name: Gemini 지능 주입 및 APK 굽기
-        run: cd Skills/NoahScore && flutter build apk --release --dart-define=GEMINI_API_KEY=${{ secrets.GOOGLE_API_KEY }}
+        run: flutter build apk --release --dart-define=GEMINI_API_KEY=${{ secrets.GOOGLE_API_KEY }}
       - name: 완성품 배달
         uses: actions/upload-artifact@v4
         with:
           name: app-release
-          path: Skills/NoahScore/build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
