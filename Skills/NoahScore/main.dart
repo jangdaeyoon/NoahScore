@@ -42,7 +42,7 @@ class _HomePageState extends State<HomePage> {
       body: IndexedStack(
         index: _currentIndex,
         children: [
-          AllMatchesPage(apiKey: footballApiKey),      // 1. 커스텀 AI 픽 (클릭용)
+          AllMatchesPage(apiKey: footballApiKey),      // 1. 커스텀 분석 (클릭용)
           GamesWidgetPage(apiKey: footballApiKey),     // 2. 전체 일정 위젯
           StandingsWidgetPage(apiKey: footballApiKey), // 3. 순위 위젯
           LeaguesWidgetPage(apiKey: footballApiKey),   // 4. 리그 위젯
@@ -66,7 +66,6 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// --- [데이터 엔진: 가짜 데이터(루프) 완전 배제] ---
 class NoahDataEngine {
   static const String host = 'v3.football.api-sports.io';
 
@@ -82,7 +81,6 @@ class NoahDataEngine {
       final res = await http.get(Uri.parse('http://localhost:5000/analyze')).timeout(const Duration(milliseconds: 500));
       return json.decode(res.body);
     } catch (e) {
-      // 서버 연결 실패 시 API-Football의 실제 예측 데이터 파싱 (더미 폐기)
       final fallbackRes = await http.get(Uri.parse('https://$host/predictions?fixture=$fixtureId'), headers: {'x-rapidapi-key': key, 'x-rapidapi-host': host});
       int homeWin = 33, draw = 33, awayWin = 34, homeAtt = 50, awayDef = 50;
       try {
@@ -102,7 +100,7 @@ class NoahDataEngine {
   }
 }
 
-// --- [★핵심 해결책: 튼튼한 위젯 전용 엔진 (StatefulWidget)] ---
+// --- [★완벽 수정본: V2 문법 적용 및 CORS 보안 우회 엔진] ---
 class ApiWidgetDisplay extends StatefulWidget {
   final String widgetType;
   final String attributes;
@@ -120,26 +118,30 @@ class _ApiWidgetDisplayState extends State<ApiWidgetDisplay> {
   @override
   void initState() {
     super.initState();
-    // WebView 엔진이 파괴되지 않도록 한 번만 생성하여 메모리에 묶어둡니다.
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0xFF121212))
       ..loadHtmlString('''
+        <!DOCTYPE html>
         <html>
-          <head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-          <body style="background-color: #121212; margin: 0;">
-            <div id="wg-api-football-${widget.widgetType}"
-                data-host="v3.football.api-sports.io"
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <style>body { margin: 0; padding: 0; background-color: #121212; }</style>
+          </head>
+          <body>
+            <api-sports-widget
+                data-type="${widget.widgetType}"
                 data-key="${widget.apiKey}"
                 data-theme="dark"
-                data-show-errors="false"
-                ${widget.attributes}
-                class="wg_loader">
-            </div>
+                ${widget.attributes}>
+            </api-sports-widget>
             <script type="module" src="https://widgets.api-sports.io/2.0.0/widgets.js"></script>
           </body>
         </html>
-      ''');
+      ''', 
+      // 보안 차단을 뚫기 위한 baseUrl (가장 중요)
+      baseUrl: 'https://widgets.api-sports.io');
   }
 
   @override
@@ -165,7 +167,7 @@ class MatchDetailPage extends StatelessWidget {
     int awayId = match['teams']['away']['id'];
 
     return DefaultTabController(
-      length: 5, // 5개의 상세 탭 구성
+      length: 5,
       child: Scaffold(
         appBar: AppBar(
           title: Text('$homeName vs $awayName', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
@@ -187,10 +189,10 @@ class MatchDetailPage extends StatelessWidget {
           physics: const NeverScrollableScrollPhysics(),
           children: [
             _buildAiAnalysisTab(homeName, awayName, fixtureId),
+            // 속성들을 스크린샷과 100% 동일하게 매칭
             ApiWidgetDisplay(widgetType: "game", attributes: 'data-game-id="$fixtureId"', apiKey: apiKey),
             ApiWidgetDisplay(widgetType: "h2h", attributes: 'data-h2h="$homeId-$awayId"', apiKey: apiKey),
             ApiWidgetDisplay(widgetType: "team", attributes: 'data-team-id="$homeId"', apiKey: apiKey),
-            // 선수 위젯 샘플 (추후 특정 선수의 ID를 동적으로 받아올 수 있습니다. 현재는 예시로 메시 ID 삽입)
             ApiWidgetDisplay(widgetType: "player", attributes: 'data-player-id="154" data-season="2023"', apiKey: apiKey),
           ],
         ),
@@ -271,7 +273,7 @@ class MatchDetailPage extends StatelessWidget {
   );
 }
 
-// --- [목록 페이지: 클릭용 리스트] ---
+// --- [목록 페이지] ---
 class AllMatchesPage extends StatelessWidget {
   final String apiKey;
   const AllMatchesPage({super.key, required this.apiKey});
@@ -310,7 +312,7 @@ class GamesWidgetPage extends StatelessWidget {
   final String apiKey;
   const GamesWidgetPage({super.key, required this.apiKey}); 
   @override Widget build(BuildContext context) {
-    // 위젯 5: games (오늘의 전체 경기 일정 위젯)
+    // 위젯 5: games
     return SafeArea(child: ApiWidgetDisplay(widgetType: "games", attributes: 'data-date="${DateFormat('yyyy-MM-dd').format(DateTime.now())}"', apiKey: apiKey));
   }
 }
@@ -319,7 +321,7 @@ class StandingsWidgetPage extends StatelessWidget {
   final String apiKey;
   const StandingsWidgetPage({super.key, required this.apiKey}); 
   @override Widget build(BuildContext context) {
-    // 위젯 6: standings (기본 영국 프리미어리그 순위)
+    // 위젯 6: standings
     return SafeArea(child: ApiWidgetDisplay(widgetType: "standings", attributes: 'data-league="39" data-season="2023"', apiKey: apiKey));
   }
 }
@@ -328,7 +330,7 @@ class LeaguesWidgetPage extends StatelessWidget {
   final String apiKey;
   const LeaguesWidgetPage({super.key, required this.apiKey}); 
   @override Widget build(BuildContext context) {
-    // 위젯 7: leagues (전 세계 리그 탐색)
+    // 위젯 7: leagues
     return SafeArea(child: ApiWidgetDisplay(widgetType: "leagues", attributes: '', apiKey: apiKey));
   }
 }
