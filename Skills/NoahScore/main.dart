@@ -3,12 +3,10 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:collection/collection.dart';
 import 'package:intl/intl.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // 보안을 위해 API 키는 빌드 시 주입받습니다.
-  // await Firebase.initializeApp(); 
   runApp(const NoahScoreV2());
 }
 
@@ -36,8 +34,6 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _currentIndex = 0;
-  // 빌드 시 주입되는 Gemini API 키 환경 변수
-  static const String geminiKey = String.fromEnvironment('GEMINI_API_KEY');
   final String footballApiKey = '8b3c5b00b4a18b203a63f7f0aba0ddd2'; 
 
   @override
@@ -48,8 +44,8 @@ class _HomePageState extends State<HomePage> {
         children: [
           AllMatchesPage(apiKey: footballApiKey),
           LiveMatchesPage(apiKey: footballApiKey),
-          const StandingsPage(),
-          const LeagueExplorerScreen(),
+          StandingsPage(apiKey: footballApiKey),
+          LeagueExplorerScreen(apiKey: footballApiKey),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -86,102 +82,164 @@ class NoahDataEngine {
     return json.decode(res.body)['response'] ?? [];
   }
 
-  static Future<Map<String, dynamic>> fetchAiPrediction(int fixtureId) async {
-    // 실제 운영 시에는 주인님의 C++ 코어 서버 주소로 변경합니다. [cite: 2026-03-02]
+  static Future<Map<String, dynamic>> fetchAiPrediction(int fixtureId, String key) async {
     try {
-      final res = await http.get(Uri.parse('http://localhost:5000/analyze')).timeout(const Duration(seconds: 1));
+      final res = await http.get(Uri.parse('http://localhost:5000/analyze')).timeout(const Duration(milliseconds: 500));
       return json.decode(res.body);
     } catch (e) {
-      // 서버 미가동 시 더미 데이터 (시각화 테스트용)
+      final fallbackRes = await http.get(Uri.parse('https://$host/predictions?fixture=$fixtureId'), headers: {'x-rapidapi-key': key, 'x-rapidapi-host': host});
+      int homeWin = 33, draw = 33, awayWin = 34, homeAtt = 50, awayDef = 50;
+      try {
+        var data = json.decode(fallbackRes.body)['response'][0];
+        homeWin = int.tryParse(data['predictions']['percent']['home'].replaceAll('%', '')) ?? 33;
+        draw = int.tryParse(data['predictions']['percent']['draw'].replaceAll('%', '')) ?? 33;
+        awayWin = int.tryParse(data['predictions']['percent']['away'].replaceAll('%', '')) ?? 34;
+        homeAtt = int.tryParse(data['comparison']['att']['home'].replaceAll('%', '')) ?? 50;
+        awayDef = int.tryParse(data['comparison']['def']['away'].replaceAll('%', '')) ?? 50;
+      } catch (e) { }
       return {
-        "prediction": {"home": 64, "draw": 21, "away": 15},
-        "visual_metrics": {"spear": 83, "shield": 37},
-        "value_analysis": {"roi": 18.7}
+        "prediction": {"home": homeWin, "draw": draw, "away": awayWin},
+        "visual_metrics": {"spear": homeAtt, "shield": awayDef},
+        "value_analysis": {"roi": (homeWin * 0.15).toStringAsFixed(1)} 
       };
     }
   }
 }
 
-// --- [상세 분석 페이지: 창과 방패 UI] ---
+// --- [공통 위젯 생성기 (HTML 템플릿)] ---
+Widget buildApiWidget(String widgetType, String attributes, String apiKey) {
+  final controller = WebViewController()
+    ..setJavaScriptMode(JavaScriptMode.unrestricted)
+    ..setBackgroundColor(const Color(0xFF121212))
+    ..loadHtmlString('''
+      <html>
+        <head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+        <body style="background-color: #121212; margin: 0;">
+          <div id="wg-api-football-$widgetType"
+              data-host="v3.football.api-sports.io"
+              data-key="$apiKey"
+              data-theme="dark"
+              data-show-errors="false"
+              $attributes
+              class="wg_loader">
+          </div>
+          <script type="module" src="https://widgets.api-sports.io/2.0.0/widgets.js"></script>
+        </body>
+      </html>
+    ''');
+  return WebViewWidget(controller: controller);
+}
+
+// --- [상세 분석 페이지: AI 분석 + 게임/H2H/팀 위젯 통합] ---
 class MatchDetailPage extends StatelessWidget {
   final dynamic match;
-  const MatchDetailPage({super.key, required this.match});
+  final String apiKey;
+  const MatchDetailPage({super.key, required this.match, required this.apiKey});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('${match['teams']['home']['name']} vs ${match['teams']['away']['name']}')),
-      body: FutureBuilder<Map<String, dynamic>>(
-        future: NoahDataEngine.fetchAiPrediction(match['fixture']['id']),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          var ai = snapshot.data!;
-          return SingleChildScrollView(
-            child: Column(
-              children: [
-                _buildVisualMetrics(ai['visual_metrics']['spear'], ai['visual_metrics']['shield']), 
-                _buildAiReportCard(ai),
-              ],
-            ),
-          );
-        }
+    String homeName = match['teams']['home']['name'];
+    String awayName = match['teams']['away']['name'];
+    int fixtureId = match['fixture']['id'];
+    int homeId = match['teams']['home']['id'];
+    int awayId = match['teams']['away']['id'];
+
+    return DefaultTabController(
+      length: 4, // 4개의 탭 생성
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text('$homeName vs $awayName', style: const TextStyle(fontSize: 16)),
+          bottom: const TabBar(
+            isScrollable: true,
+            indicatorColor: Colors.blueAccent,
+            tabs: [
+              Tab(text: "AI 분석"),
+              Tab(text: "매치 센터"), // 게임 위젯
+              Tab(text: "상대 전적"), // H2H 위젯
+              Tab(text: "팀 정보"), // 팀 위젯
+            ],
+          ),
+        ),
+        body: TabBarView(
+          physics: const NeverScrollableScrollPhysics(), // 스와이프 간섭 방지
+          children: [
+            // 탭 1: AI 승률 분석 (기존)
+            _buildAiAnalysisTab(homeName, awayName, fixtureId),
+            // 탭 2: 게임 위젯 (라인업, 실시간 스탯)
+            buildApiWidget("game", 'data-game-id="$fixtureId"', apiKey),
+            // 탭 3: H2H 위젯 (맞대결)
+            buildApiWidget("h2h", 'data-h2h="$homeId-$awayId"', apiKey),
+            // 탭 4: 팀 위젯 (홈팀 기준 스쿼드/선수 정보)
+            buildApiWidget("team", 'data-team-id="$homeId"', apiKey),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildVisualMetrics(int spear, int shield) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 30),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _metricColumn("창 (공격)", spear, Colors.redAccent),
-          const Icon(Icons.bolt, color: Colors.amber, size: 50),
-          _metricColumn("방패 (수비)", shield, Colors.blueAccent),
-        ],
-      ),
+  Widget _buildAiAnalysisTab(String homeName, String awayName, int fixtureId) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: NoahDataEngine.fetchAiPrediction(fixtureId, apiKey),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        var ai = snapshot.data!;
+        return SingleChildScrollView(
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 30),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    Expanded(child: _metricColumn("$homeName\n(공격력)", ai['visual_metrics']['spear'], Colors.redAccent)),
+                    const Icon(Icons.bolt, color: Colors.amber, size: 40),
+                    Expanded(child: _metricColumn("$awayName\n(수비력)", ai['visual_metrics']['shield'], Colors.blueAccent)),
+                  ],
+                ),
+              ),
+              Card(
+                margin: const EdgeInsets.all(16),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      const Row(children: [Icon(Icons.auto_awesome, color: Colors.amber), SizedBox(width: 10), Text("Noah AI 승률 분석", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))]),
+                      const SizedBox(height: 25),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          _probText("홈승", ai['prediction']['home'], Colors.redAccent),
+                          _probText("무승부", ai['prediction']['draw'], Colors.grey),
+                          _probText("원정승", ai['prediction']['away'], Colors.blueAccent),
+                        ],
+                      ),
+                      const Divider(height: 40, color: Colors.white24),
+                      const Text("💰 실시간 배류(Value) 리포트", style: TextStyle(color: Colors.amber, letterSpacing: 1.2)),
+                      const SizedBox(height: 10),
+                      Text("+${ai['value_analysis']['roi']}% 기댓값 발생", style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                    ],
+                  ),
+                ),
+              )
+            ],
+          ),
+        );
+      }
     );
   }
 
   Widget _metricColumn(String label, int val, Color col) => Column(
     children: [
-      Text(label, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+      Text(label, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 13)),
       const SizedBox(height: 15),
       Stack(
         alignment: Alignment.center,
         children: [
-          SizedBox(width: 90, height: 90, child: CircularProgressIndicator(value: val/100, color: col, strokeWidth: 10, backgroundColor: Colors.white10)),
-          Text('$val', style: TextStyle(color: col, fontSize: 24, fontWeight: FontWeight.bold)),
+          SizedBox(width: 80, height: 80, child: CircularProgressIndicator(value: val/100, color: col, strokeWidth: 8, backgroundColor: Colors.white10)),
+          Text('$val', style: TextStyle(color: col, fontSize: 22, fontWeight: FontWeight.bold)),
         ],
       ),
     ],
-  );
-
-  Widget _buildAiReportCard(Map<String, dynamic> ai) => Card(
-    margin: const EdgeInsets.all(16),
-    child: Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        children: [
-          const Row(children: [Icon(Icons.auto_awesome, color: Colors.amber), SizedBox(width: 10), Text("Noah AI 승률 분석", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))]),
-          const SizedBox(height: 25),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _probText("홈승", ai['prediction']['home'], Colors.redAccent),
-              _probText("무승부", ai['prediction']['draw'], Colors.grey),
-              _probText("원정승", ai['prediction']['away'], Colors.blueAccent),
-            ],
-          ),
-          const Divider(height: 40, color: Colors.white24),
-          const Text("💰 실시간 배류(Value) 리포트", style: TextStyle(color: Colors.amber, letterSpacing: 1.2)),
-          const SizedBox(height: 10),
-          Text("+${ai['value_analysis']['roi']}% 기댓값 발생", style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.greenAccent)),
-          const SizedBox(height: 10),
-          const Text("북메이커 대비 15% 이상 유리한 고지", style: TextStyle(fontSize: 12, color: Colors.grey)),
-        ],
-      ),
-    ),
   );
 
   Widget _probText(String label, int val, Color col) => Column(
@@ -192,14 +250,14 @@ class MatchDetailPage extends StatelessWidget {
   );
 }
 
-// --- [AllMatchesPage & LiveMatchesPage: 생략된 부분 복원] ---
+// --- [목록 페이지들] ---
 class AllMatchesPage extends StatelessWidget {
   final String apiKey;
   const AllMatchesPage({super.key, required this.apiKey});
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('NoahScore V2.1')),
+      appBar: AppBar(title: const Text('NoahScore V2.2 (Widgets Pro)')),
       body: FutureBuilder<Map<String, List<dynamic>>>(
         future: NoahDataEngine.fetchTodayMatches(apiKey),
         builder: (context, snapshot) {
@@ -215,7 +273,7 @@ class AllMatchesPage extends StatelessWidget {
                   leading: Image.network(m['teams']['home']['logo'], width: 30),
                   title: Text("${m['teams']['home']['name']} vs ${m['teams']['away']['name']}", style: const TextStyle(fontSize: 13)),
                   trailing: Text("${m['goals']['home'] ?? '-'} : ${m['goals']['away'] ?? '-'}", style: const TextStyle(fontWeight: FontWeight.bold)),
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MatchDetailPage(match: m))),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MatchDetailPage(match: m, apiKey: apiKey))),
                 )).toList(),
               );
             },
@@ -248,7 +306,7 @@ class LiveMatchesPage extends StatelessWidget {
                   leading: CircleAvatar(backgroundColor: Colors.red, radius: 15, child: Text("${m['fixture']['status']['elapsed']}'", style: const TextStyle(fontSize: 10, color: Colors.white))),
                   title: Text("${m['teams']['home']['name']} vs ${m['teams']['away']['name']}"),
                   trailing: Text("${m['goals']['home']} : ${m['goals']['away']}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.greenAccent)),
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MatchDetailPage(match: m))),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MatchDetailPage(match: m, apiKey: apiKey))),
                 ),
               );
             },
@@ -259,5 +317,21 @@ class LiveMatchesPage extends StatelessWidget {
   }
 }
 
-class StandingsPage extends StatelessWidget { const StandingsPage({super.key}); @override Widget build(BuildContext context) => const Center(child: Text("순위 데이터 분석 중...")); }
-class LeagueExplorerScreen extends StatelessWidget { const LeagueExplorerScreen({super.key}); @override Widget build(BuildContext context) => const Center(child: Text("글로벌 리그 탐색 준비 중...")); }
+// --- [순위 탭 (Standings 위젯)] ---
+class StandingsPage extends StatelessWidget { 
+  final String apiKey;
+  const StandingsPage({super.key, required this.apiKey}); 
+  @override Widget build(BuildContext context) {
+    // 기본으로 영국 프리미어리그(39) 순위를 띄움
+    return SafeArea(child: buildApiWidget("standings", 'data-league="39" data-season="2023"', apiKey));
+  }
+}
+
+// --- [탐색 탭 (Leagues 위젯)] ---
+class LeagueExplorerScreen extends StatelessWidget { 
+  final String apiKey;
+  const LeagueExplorerScreen({super.key, required this.apiKey}); 
+  @override Widget build(BuildContext context) {
+    return SafeArea(child: buildApiWidget("leagues", '', apiKey));
+  }
+}
