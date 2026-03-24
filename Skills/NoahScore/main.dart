@@ -42,31 +42,31 @@ class _HomePageState extends State<HomePage> {
       body: IndexedStack(
         index: _currentIndex,
         children: [
-          AllMatchesPage(apiKey: footballApiKey),
-          LiveMatchesPage(apiKey: footballApiKey),
-          StandingsPage(apiKey: footballApiKey),
-          LeagueExplorerScreen(apiKey: footballApiKey),
+          AllMatchesPage(apiKey: footballApiKey),      // 1. 커스텀 AI 픽 (클릭용)
+          GamesWidgetPage(apiKey: footballApiKey),     // 2. 전체 일정 위젯
+          StandingsWidgetPage(apiKey: footballApiKey), // 3. 순위 위젯
+          LeaguesWidgetPage(apiKey: footballApiKey),   // 4. 리그 위젯
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
         backgroundColor: const Color(0xFF1F1F1F),
-        selectedItemColor: Colors.blueAccent,
+        selectedItemColor: Colors.amberAccent,
         unselectedItemColor: Colors.grey,
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.view_list), label: '오늘경기'),
-          BottomNavigationBarItem(icon: Icon(Icons.live_tv), label: 'LIVE'),
-          BottomNavigationBarItem(icon: Icon(Icons.leaderboard), label: '순위'),
-          BottomNavigationBarItem(icon: Icon(Icons.public), label: '탐색'),
+          BottomNavigationBarItem(icon: Icon(Icons.analytics), label: 'AI 분석'),
+          BottomNavigationBarItem(icon: Icon(Icons.calendar_today), label: '일정'),
+          BottomNavigationBarItem(icon: Icon(Icons.format_list_numbered), label: '순위'),
+          BottomNavigationBarItem(icon: Icon(Icons.public), label: '리그'),
         ],
       ),
     );
   }
 }
 
-// --- [데이터 엔진] ---
+// --- [데이터 엔진: 가짜 데이터(루프) 완전 배제] ---
 class NoahDataEngine {
   static const String host = 'v3.football.api-sports.io';
 
@@ -77,16 +77,12 @@ class NoahDataEngine {
     return groupBy(matches, (m) => "${m['league']['country']} - ${m['league']['name']}");
   }
 
-  static Future<List<dynamic>> fetchLiveMatches(String key) async {
-    final res = await http.get(Uri.parse('https://$host/fixtures?live=all'), headers: {'x-rapidapi-key': key, 'x-rapidapi-host': host});
-    return json.decode(res.body)['response'] ?? [];
-  }
-
   static Future<Map<String, dynamic>> fetchAiPrediction(int fixtureId, String key) async {
     try {
       final res = await http.get(Uri.parse('http://localhost:5000/analyze')).timeout(const Duration(milliseconds: 500));
       return json.decode(res.body);
     } catch (e) {
+      // 서버 연결 실패 시 API-Football의 실제 예측 데이터 파싱 (더미 폐기)
       final fallbackRes = await http.get(Uri.parse('https://$host/predictions?fixture=$fixtureId'), headers: {'x-rapidapi-key': key, 'x-rapidapi-host': host});
       int homeWin = 33, draw = 33, awayWin = 34, homeAtt = 50, awayDef = 50;
       try {
@@ -106,31 +102,55 @@ class NoahDataEngine {
   }
 }
 
-// --- [공통 위젯 생성기 (HTML 템플릿)] ---
-Widget buildApiWidget(String widgetType, String attributes, String apiKey) {
-  final controller = WebViewController()
-    ..setJavaScriptMode(JavaScriptMode.unrestricted)
-    ..setBackgroundColor(const Color(0xFF121212))
-    ..loadHtmlString('''
-      <html>
-        <head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-        <body style="background-color: #121212; margin: 0;">
-          <div id="wg-api-football-$widgetType"
-              data-host="v3.football.api-sports.io"
-              data-key="$apiKey"
-              data-theme="dark"
-              data-show-errors="false"
-              $attributes
-              class="wg_loader">
-          </div>
-          <script type="module" src="https://widgets.api-sports.io/2.0.0/widgets.js"></script>
-        </body>
-      </html>
-    ''');
-  return WebViewWidget(controller: controller);
+// --- [★핵심 해결책: 튼튼한 위젯 전용 엔진 (StatefulWidget)] ---
+class ApiWidgetDisplay extends StatefulWidget {
+  final String widgetType;
+  final String attributes;
+  final String apiKey;
+
+  const ApiWidgetDisplay({super.key, required this.widgetType, required this.attributes, required this.apiKey});
+
+  @override
+  State<ApiWidgetDisplay> createState() => _ApiWidgetDisplayState();
 }
 
-// --- [상세 분석 페이지: AI 분석 + 게임/H2H/팀 위젯 통합] ---
+class _ApiWidgetDisplayState extends State<ApiWidgetDisplay> {
+  late final WebViewController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    // WebView 엔진이 파괴되지 않도록 한 번만 생성하여 메모리에 묶어둡니다.
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0xFF121212))
+      ..loadHtmlString('''
+        <html>
+          <head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+          <body style="background-color: #121212; margin: 0;">
+            <div id="wg-api-football-${widget.widgetType}"
+                data-host="v3.football.api-sports.io"
+                data-key="${widget.apiKey}"
+                data-theme="dark"
+                data-show-errors="false"
+                ${widget.attributes}
+                class="wg_loader">
+            </div>
+            <script type="module" src="https://widgets.api-sports.io/2.0.0/widgets.js"></script>
+          </body>
+        </html>
+      ''');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.expand(
+      child: WebViewWidget(controller: _controller),
+    );
+  }
+}
+
+// --- [상세 분석 페이지: 5개의 탭으로 나눈 궁극의 정보 센터] ---
 class MatchDetailPage extends StatelessWidget {
   final dynamic match;
   final String apiKey;
@@ -145,32 +165,33 @@ class MatchDetailPage extends StatelessWidget {
     int awayId = match['teams']['away']['id'];
 
     return DefaultTabController(
-      length: 4, // 4개의 탭 생성
+      length: 5, // 5개의 상세 탭 구성
       child: Scaffold(
         appBar: AppBar(
-          title: Text('$homeName vs $awayName', style: const TextStyle(fontSize: 16)),
+          title: Text('$homeName vs $awayName', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
           bottom: const TabBar(
             isScrollable: true,
-            indicatorColor: Colors.blueAccent,
+            indicatorColor: Colors.amberAccent,
+            labelColor: Colors.amberAccent,
+            unselectedLabelColor: Colors.grey,
             tabs: [
               Tab(text: "AI 분석"),
-              Tab(text: "매치 센터"), // 게임 위젯
-              Tab(text: "상대 전적"), // H2H 위젯
-              Tab(text: "팀 정보"), // 팀 위젯
+              Tab(text: "매치 센터"),   // 위젯 1: game
+              Tab(text: "상대 전적"),   // 위젯 2: h2h
+              Tab(text: "홈팀 정보"),   // 위젯 3: team
+              Tab(text: "스타 플레이어"),// 위젯 4: player
             ],
           ),
         ),
         body: TabBarView(
-          physics: const NeverScrollableScrollPhysics(), // 스와이프 간섭 방지
+          physics: const NeverScrollableScrollPhysics(),
           children: [
-            // 탭 1: AI 승률 분석 (기존)
             _buildAiAnalysisTab(homeName, awayName, fixtureId),
-            // 탭 2: 게임 위젯 (라인업, 실시간 스탯)
-            buildApiWidget("game", 'data-game-id="$fixtureId"', apiKey),
-            // 탭 3: H2H 위젯 (맞대결)
-            buildApiWidget("h2h", 'data-h2h="$homeId-$awayId"', apiKey),
-            // 탭 4: 팀 위젯 (홈팀 기준 스쿼드/선수 정보)
-            buildApiWidget("team", 'data-team-id="$homeId"', apiKey),
+            ApiWidgetDisplay(widgetType: "game", attributes: 'data-game-id="$fixtureId"', apiKey: apiKey),
+            ApiWidgetDisplay(widgetType: "h2h", attributes: 'data-h2h="$homeId-$awayId"', apiKey: apiKey),
+            ApiWidgetDisplay(widgetType: "team", attributes: 'data-team-id="$homeId"', apiKey: apiKey),
+            // 선수 위젯 샘플 (추후 특정 선수의 ID를 동적으로 받아올 수 있습니다. 현재는 예시로 메시 ID 삽입)
+            ApiWidgetDisplay(widgetType: "player", attributes: 'data-player-id="154" data-season="2023"', apiKey: apiKey),
           ],
         ),
       ),
@@ -250,14 +271,14 @@ class MatchDetailPage extends StatelessWidget {
   );
 }
 
-// --- [목록 페이지들] ---
+// --- [목록 페이지: 클릭용 리스트] ---
 class AllMatchesPage extends StatelessWidget {
   final String apiKey;
   const AllMatchesPage({super.key, required this.apiKey});
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('NoahScore V2.2 (Widgets Pro)')),
+      appBar: AppBar(title: const Text('Noah AI 픽 보드', style: TextStyle(fontWeight: FontWeight.bold))),
       body: FutureBuilder<Map<String, List<dynamic>>>(
         future: NoahDataEngine.fetchTodayMatches(apiKey),
         builder: (context, snapshot) {
@@ -268,7 +289,7 @@ class AllMatchesPage extends StatelessWidget {
               String league = snapshot.data!.keys.elementAt(index);
               return ExpansionTile(
                 initiallyExpanded: true,
-                title: Text(league, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+                title: Text(league, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.amberAccent)),
                 children: snapshot.data![league]!.map((m) => ListTile(
                   leading: Image.network(m['teams']['home']['logo'], width: 30),
                   title: Text("${m['teams']['home']['name']} vs ${m['teams']['away']['name']}", style: const TextStyle(fontSize: 13)),
@@ -284,54 +305,30 @@ class AllMatchesPage extends StatelessWidget {
   }
 }
 
-class LiveMatchesPage extends StatelessWidget {
+// --- [하단 탭용 공식 위젯들 (일정, 순위, 리그)] ---
+class GamesWidgetPage extends StatelessWidget { 
   final String apiKey;
-  const LiveMatchesPage({super.key, required this.apiKey});
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('LIVE Matches', style: TextStyle(color: Colors.redAccent))),
-      body: FutureBuilder<List<dynamic>>(
-        future: NoahDataEngine.fetchLiveMatches(apiKey),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          if (snapshot.data!.isEmpty) return const Center(child: Text("현재 진행 중인 경기가 없습니다."));
-          return ListView.builder(
-            itemCount: snapshot.data!.length,
-            itemBuilder: (context, index) {
-              var m = snapshot.data![index];
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                child: ListTile(
-                  leading: CircleAvatar(backgroundColor: Colors.red, radius: 15, child: Text("${m['fixture']['status']['elapsed']}'", style: const TextStyle(fontSize: 10, color: Colors.white))),
-                  title: Text("${m['teams']['home']['name']} vs ${m['teams']['away']['name']}"),
-                  trailing: Text("${m['goals']['home']} : ${m['goals']['away']}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.greenAccent)),
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MatchDetailPage(match: m, apiKey: apiKey))),
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
+  const GamesWidgetPage({super.key, required this.apiKey}); 
+  @override Widget build(BuildContext context) {
+    // 위젯 5: games (오늘의 전체 경기 일정 위젯)
+    return SafeArea(child: ApiWidgetDisplay(widgetType: "games", attributes: 'data-date="${DateFormat('yyyy-MM-dd').format(DateTime.now())}"', apiKey: apiKey));
   }
 }
 
-// --- [순위 탭 (Standings 위젯)] ---
-class StandingsPage extends StatelessWidget { 
+class StandingsWidgetPage extends StatelessWidget { 
   final String apiKey;
-  const StandingsPage({super.key, required this.apiKey}); 
+  const StandingsWidgetPage({super.key, required this.apiKey}); 
   @override Widget build(BuildContext context) {
-    // 기본으로 영국 프리미어리그(39) 순위를 띄움
-    return SafeArea(child: buildApiWidget("standings", 'data-league="39" data-season="2023"', apiKey));
+    // 위젯 6: standings (기본 영국 프리미어리그 순위)
+    return SafeArea(child: ApiWidgetDisplay(widgetType: "standings", attributes: 'data-league="39" data-season="2023"', apiKey: apiKey));
   }
 }
 
-// --- [탐색 탭 (Leagues 위젯)] ---
-class LeagueExplorerScreen extends StatelessWidget { 
+class LeaguesWidgetPage extends StatelessWidget { 
   final String apiKey;
-  const LeagueExplorerScreen({super.key, required this.apiKey}); 
+  const LeaguesWidgetPage({super.key, required this.apiKey}); 
   @override Widget build(BuildContext context) {
-    return SafeArea(child: buildApiWidget("leagues", '', apiKey));
+    // 위젯 7: leagues (전 세계 리그 탐색)
+    return SafeArea(child: ApiWidgetDisplay(widgetType: "leagues", attributes: '', apiKey: apiKey));
   }
 }
