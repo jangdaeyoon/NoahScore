@@ -17,22 +17,22 @@ jobs:
       run: |
         flutter create noah_score_app
         cp Skills/NoahScore/main.dart noah_score_app/lib/main.dart
-    - name: 4. 필수 라이브러리 주입 (webview_flutter 추가)
+    - name: 4. 필수 라이브러리 주입
       run: |
         cd noah_score_app
-        # 여기에 webview_flutter를 추가했습니다!
-        flutter pub add http collection intl firebase_core webview_flutter
+        flutter pub add http collection intl webview_flutter
         flutter pub get
-    - name: 5. 안드로이드 필수 설정 (인터넷, SDK 21, 코틀린 1.8.22 상향)
+    - name: 5. 안드로이드 설정 (SDK 21, 코틀린 1.8.22)
       run: |
         sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>' noah_score_app/android/app/src/main/AndroidManifest.xml
         sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' noah_score_app/android/app/build.gradle
         sed -i 's/1.7.10/1.8.22/g' noah_score_app/android/settings.gradle || true
         sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '\''1.8.22'\''/g' noah_score_app/android/build.gradle || true
-    - name: 6. APK 최종 컴파일 (Gemini API 키 주입)
+    - name: 6. APK 최종 컴파일 (금고의 키를 코드에 주입)
       run: |
         cd noah_score_app
-        flutter build apk --release --dart-define=GEMINI_API_KEY=${{ secrets.GOOGLE_API_KEY }}
+        flutter build apk --release \
+          --dart-define=FOOTBALL_API_KEY=${{ secrets.FOOTBALL_API_KEY }}
     - name: 7. 결과물 업로드
       uses: actions/upload-artifact@v4
       with:
