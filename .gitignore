@@ -1,0 +1,18 @@
+﻿.env
+<<<<<<< HEAD
+*.g.dart
+build/
+.dart_tool/
+android/app/key.properties
+ios/Flutter/Generated.xcconfig
+
+/Brain/
+/venv/
+
+/Brain/
+/venv/
+=======
+build/
+.dart_tool/
+*.g.dart
+>>>>>>> ea6487a5f548439b95fd59ed917c288a68fd1d59

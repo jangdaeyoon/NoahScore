@@ -1,0 +1,10 @@
+^C:\NOAH_ASI\BUILD_ASI\CMAKEFILES\28515BAADE12682063EFB4711B0D6CE4\GENERATE.STAMP.RULE
+setlocal
+C:\Users\NOAH\Downloads\bin\cmake.exe -SC:/Noah_ASI -BC:/Noah_ASI/build_asi --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Noah_ASI/build_asi/Noah_ASI.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

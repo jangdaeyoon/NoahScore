@@ -1,0 +1,10 @@
+^C:\NOAH_ASI\CMAKELISTS.TXT
+setlocal
+C:\Users\NOAH\Downloads\bin\cmake.exe -SC:/Noah_ASI -BC:/Noah_ASI/build_asi --check-stamp-file C:/Noah_ASI/build_asi/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

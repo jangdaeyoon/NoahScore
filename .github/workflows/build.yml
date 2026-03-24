@@ -1,0 +1,36 @@
+﻿name: Build NoahScore APK
+on:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 1. 코드 가져오기
+      uses: actions/checkout@v4
+    - name: 2. Flutter 환경 세팅
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+        flutter-version: '3.19.0' # 안정적인 버전을 명시하여 오류 방지
+    - name: 3. 앱 생성 및 코드 이식
+      run: |
+        flutter create noah_score_app
+        cp main.dart noah_score_app/lib/main.dart
+    - name: 4. 필수 라이브러리 혈관 주입 (http, collection)
+      run: |
+        cd noah_score_app
+        flutter pub add http collection
+        flutter pub get
+    - name: 5. 안드로이드 인터넷 권한 주입
+      run: |
+        sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>' noah_score_app/android/app/src/main/AndroidManifest.xml
+    - name: 6. APK 최종 컴파일
+      run: |
+        cd noah_score_app
+        flutter build apk --release
+    - name: 7. 결과물 업로드
+      uses: actions/upload-artifact@v4
+      with:
+        name: NoahScore-App
+        path: noah_score_app/build/app/outputs/flutter-apk/app-release.apk

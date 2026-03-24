@@ -1,0 +1,13 @@
+Noah_ASI Memory Core Initialized.
+[API-Football 공식 개발 지침 (절대 준수)]
+1. 기본 URL: https://v3.football.api-sports.io/
+2. 인증 헤더: 'x-rapidapi-key' 와 'x-rapidapi-host' 를 반드시 사용한다.
+3. 데이터 파싱 필수 규칙: 응답에서 항상 'response' 배열을 확인하고, 페이지네이션이 있는 경우 'paging' 객체의 'total' 값을 반드시 확인하여 데이터 누락을 방지한다.
+4. 시즌 연도 규칙: 유럽 리그(EPL, 라리가 등)는 개막 연도(예: 2025-2026 시즌은 '2025')를 사용하고, 봄에 개막하는 리그(K리그 등)는 해당 연도(예: '2026')를 사용한다.
+5. 호출 최적화 (할당량 방어): 
+   - /leagues, /teams 등 정적 데이터는 가급적 1회 호출 후 캐싱.
+   - /fixtures 실시간 상태는 15~60초 간격, /standings 는 1시간 간격 업데이트.
+   - 오류 코드 429(속도 제한) 방지를 위해 무의미한 연속 호출 금지.
+6. 커버리지 확인: /leagues 호출 시 반환되는 'coverage' 객체를 확인하여, 해당 대회에서 통계/부상/예측 데이터를 제공하는지 먼저 검사한 뒤 UI를 구성한다.
+7. 베팅 ID 주의: 경기 전 배당률(/odds/bets)과 실시간 배당률(/odds/live/bets)의 ID는 완전히 다르므로 절대 혼용하지 마라.
+8. 시간 변환: 시간대는 timezone 파라미터를 사용하거나, fixture.timestamp(Unix Time)를 활용해 로컬 디바이스 시간에 맞춘다.

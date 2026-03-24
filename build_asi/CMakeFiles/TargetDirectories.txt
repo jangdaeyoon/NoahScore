@@ -1,0 +1,3 @@
+C:/Noah_ASI/build_asi/CMakeFiles/Noah_ASI.dir
+C:/Noah_ASI/build_asi/CMakeFiles/ALL_BUILD.dir
+C:/Noah_ASI/build_asi/CMakeFiles/ZERO_CHECK.dir

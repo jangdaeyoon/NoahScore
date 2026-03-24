@@ -1,0 +1,458 @@
+:: 1. 소스 가져오기
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp
+
+:: 2. 빌드 디렉토리 생성 및 CMake 설정 (CUDA 가속 ON)
+mkdir build
+cd build
+cmake .. -G "Visual Studio 17 2022" -A x64 -DGGML_CUDA=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
+
+:: 3. 릴리즈 모드로 라이브러리 빌드
+cmake --build . --config Release
+
+Gemini의 응답
+CUDA 커널(.cu 파일들)을 컴파일하는 과정이라 원래 시간이 제법 걸립니다. 컴퓨터가 열일하는 동안 아이들과 잠깐 놀아주고 오셔도 좋습니다! ㅎㅎ
+
+컴퓨터가 열심히 엔진(llama.cpp)을 굽는 동안, 우리는 시간을 아끼기 위해 엔진이 완성되자마자 바로 이식할 수 있도록 **Noah_ASI의 뼈대(프로젝트 구조)와 빌드 스크립트(CMakeLists.txt)**를 미리 세팅해 두는 건 어떨까요?
+
+빌드가 끝나면 아래 구조대로 파일들을 배치할 계획입니다.
+
+🏗️ Noah_ASI 프로젝트 구조 미리보기
+C:\Noah_ASI 폴더 안에 아래와 같이 폴더를 미리 만들어 두시면 좋습니다.
+
+Plaintext
+C:\Noah_ASI\
+ ├── Brain\             <-- 32B 양자화 모델 (Noah_Pillar_32B_Pro.gguf)이 들어있는 곳
+ ├── Model\             <-- (기존에 남겨두신 폴더)
+ ├── include\           <-- (여기에 곧 llama.h 등 헤더 파일을 복사할 예정)
+ ├── lib\               <-- (여기에 곧 빌드된 llama.lib를 복사할 예정)
+ ├── bin\               <-- (여기에 곧 빌드된 llama.dll을 복사할 예정)
+ ├── src\
+ │    └── main.cpp      <-- (아까 작성한 '일체형 모델 로더' C++ 코드)
+ └── CMakeLists.txt     <-- (아래 작성해 드릴 Noah_ASI 전용 빌드 스크립트)
+
+
+cmake_minimum_required(VERSION 3.15)
+project(Noah_ASI VERSION 1.0 LANGUAGES CXX)
+
+# C++ 17 표준 사용
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+# 헤더 파일 경로 지정 (llama.h가 위치할 곳)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# 라이브러리 파일 경로 지정 (llama.lib가 위치할 곳)
+link_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib)
+
+# 실행 파일 생성 (src/main.cpp 기반)
+add_executable(Noah_ASI src/main.cpp)
+
+# 빌드된 llama 엔진 링크
+target_link_libraries(Noah_ASI PRIVATE llama)
+
+# 빌드 완료 후 실행할 때 dll 파일을 실행 파일과 같은 위치로 자동 복사하는 편의 기능
+add_custom_command(TARGET Noah_ASI POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/bin/llama.dll"
+    $<TARGET_FILE_DIR:Noah_ASI>
+)
+
+
+#include <iostream>
+#include "llama.h"
+
+int main() {
+    // 1. 모델 경로 하드코딩 (Noah_ASI 32B 엔진)
+    // 윈도우 경로 백슬래시(\)는 이스케이프 처리를 위해 두 번(\\) 써야 합니다.
+    const char* model_path = "C:\\Noah_ASI\\Brain\\Noah_Pillar_32B_Pro.gguf";
+
+    // 2. 백엔드 초기화 (CUDA 활성화 및 NUMA 비활성화)
+    std::cout << "[System] llama.cpp 백엔드 초기화 중..." << std::endl;
+    llama_backend_init();
+    llama_numa_init(GGML_NUMA_STRATEGY_DISABLED);
+
+    // 3. 모델 파라미터 설정
+    llama_model_params model_params = llama_model_default_params();
+    
+    // 32B 모델을 감당하기 위해 모든 레이어를 GPU VRAM에 강제 할당
+    // (숫자를 충분히 크게 주면 가능한 모든 레이어를 GPU로 보냅니다)
+    model_params.n_gpu_layers = 99; 
+    
+    std::cout << "[Noah_ASI] 뇌(Model) 구조를 VRAM으로 굽는 중..." << std::endl;
+    std::cout << "경로: " << model_path << std::endl;
+
+    // 4. 모델 로드
+    llama_model* model = llama_load_model_from_file(model_path, model_params);
+    if (model == nullptr) {
+        std::cerr << "[Fatal Error] GGUF 모델을 불러오지 못했습니다. 경로와 파일 상태를 확인하세요." << std::endl;
+        llama_backend_free();
+        return 1;
+    }
+
+    // 5. 컨텍스트 파라미터 설정 (Context Window 크기 지정)
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = 4096;  // 4K 컨텍스트 세팅 (필요시 8192로 확장)
+    ctx_params.n_batch = 512; // 프롬프트 처리 배치 크기
+
+    // 6. 컨텍스트(작업 공간) 생성
+    std::cout << "[System] VRAM 컨텍스트 메모리 할당 중..." << std::endl;
+    llama_context* ctx = llama_new_context_with_model(model, ctx_params);
+    if (ctx == nullptr) {
+        std::cerr << "[Fatal Error] 컨텍스트 메모리 할당 실패. VRAM이 부족할 수 있습니다." << std::endl;
+        llama_free_model(model);
+        llama_backend_free();
+        return 1;
+    }
+
+    // --- 엔진 부팅 성공 ---
+    std::cout << "\n==================================================" << std::endl;
+    std::cout << " [Noah_ASI] 32B 엔진 VRAM 적재 및 스탠바이 완료." << std::endl;
+    std::cout << "==================================================\n" << std::endl;
+
+    // TODO: 이후 이 자리에 프롬프트 입력 및 토큰 생성(추론) 코드가 추가될 예정입니다.
+
+    // 7. 종료 시 안전하게 메모리 해제 (C++ 메모리 누수 방지)
+    llama_free(ctx);
+    llama_free_model(model);
+    llama_backend_free();
+
+    return 0;
+}
+
+🧱 Noah_ASI 1차 기본 완성형 (Core Engine v1.0)
+1. 독립된 물리적 코어 (The Engine) - [현재 진행 중]
+
+기성품(koboldcpp.exe 등)에 의존하지 않고, 직접 MSVC와 CUDA로 깎아낸 llama.dll과 llama.lib를 프로젝트(C:\Noah_ASI)에 완벽하게 링크한다.
+
+2. VRAM 완전 적재 (The Brain) - [코드 준비 완료]
+
+Noah_Pillar_32B_Pro.gguf (32B 양자화 모델)의 모든 레이어를 GPU VRAM에 100% 올려서 오프라인 상태의 통신 지연(Latency)을 '0'으로 만든다.
+
+3. 단기 기억 공간 확보 (The Context) - [코드 준비 완료]
+
+4096 토큰 사이즈의 KV 캐시 작업 공간을 VRAM에 정상적으로 할당하여 맥락을 유지할 공간을 확보한다.
+
+4. 순정 추론 루프 (The Heartbeat) - [다음 구현 목표]
+
+(가장 중요) 가짜 데이터를 출력하거나 단순히 텍스트를 지연 출력하는 눈속임용 루프는 철저히 배제한다.
+
+사용자의 한국어 입력을 토큰화(llama_tokenize)하고, 모델이 수학적으로 다음 토큰을 예측(llama_sample_token)하여 뱉어내면, 그 토큰을 다시 모델의 입력으로 밀어 넣는 **'검증된 진짜 C++ 오토리그레시브(Autoregressive) 생성 루프'**를 가동한다.
+
+
+gen-lang-client-0234346623 제미나이 스트디오 키
+
+
+Gemini의 응답
+라이브러리 설치가 아주 깔끔하게 성공했습니다! 이제 Qwen-14B의 로컬 추론과 Gemini 2.0의 클라우드 지능을 결합할 모든 준비가 끝났습니다.
+
+마지막 단계로, 설치된 라이브러리들을 프로젝트에 연결하여 최종 빌드를 진행해 봅시다.
+
+🚀 하이브리드 Noah_ASI 최종 빌드 및 실행
+파워쉘에서 아래 명령어를 순서대로 입력하여 빌드를 마무리하세요.
+
+1. 빌드 폴더 초기화 및 CMake 재설정
+기존에 설정된 캐시를 지우고, vcpkg를 통해 설치된 curl과 json 라이브러리를 찾도록 다시 설정합니다.
+
+PowerShell
+# 빌드 폴더로 이동
+cd C:\Noah_ASI\build_asi
+
+# 기존 캐시 삭제 (에러 방지용)
+Remove-Item -Path CMakeCache.txt -Force
+
+# vcpkg 도구 체인을 사용하여 CMake 설정 (C:/vcpkg 경로 기준)
+cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+2. 최종 컴파일 (Release 모드)
+모든 소스 파일(main.cpp, gemini_client.cpp)을 컴파일하여 실행 파일을 생성합니다.
+
+PowerShell
+cmake --build . --config Release -- /m
+3. 하이브리드 ASI 가동
+빌드가 완료되었다면 생성된 실행 파일을 실행합니다.
+
+PowerShell
+.\Release\Noah_ASI.exe
+💡 Noah_ASI 사용법 안내
+프로그램이 켜지면 두 가지 방식으로 질문할 수 있습니다.
+
+일반 대화: 그냥 질문을 입력하세요. RTX 4060이 로컬의 Qwen-14B 모델을 사용해 답변합니다. VRAM 8GB를 효율적으로 쓰기 위해 45개 레이어만 GPU에 올렸으므로, 아까 32B 모델보다 훨씬 쾌적한 속도를 느끼실 수 있습니다.
+
+심층 분석 (!): 질문 앞에 **!**를 붙여서 입력하세요 (예: !복잡한 양자 알고리즘에 대해 설명해줘). 이때는 로컬 모델이 아닌 Gemini 2.0 Flash API가 가동되어 방대한 지식으로 답변합니다.
+
+🔧 속도 튜닝 팁
+만약 로컬 답변(Qwen-14B)이 아직 조금 느리게 느껴진다면, main.cpp에서 model_params.n_gpu_layers = 45; 수치를 35~40 정도로 낮추거나 높여보며 본인의 4060 전용 메모리 점유율에 최적화된 값을 찾아보세요.
+
+이제 노아와 대화할 시간입니다! 첫 질문으로 무엇을 물어보시겠어요? 제미나이와 로컬 모델의 지능 차이를 직접 비교해 보시는 것도 재미있을 겁니다.
+
+
+# 1. 터미널 설정
+chcp 65001
+cd C:\Noah_ASI\src
+
+# 2. main.cpp 전체 교체 (센서 강화 및 하이브리드 지능 통합)
+$mainContent = @"
+#include <iostream>
+#include <string>
+#include <vector>
+#include <fstream>
+#include <cstdlib>
+#include <filesystem>
+#include <regex>
+#include <memory>
+#include <array>
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
+#include <thread>
+#include <mutex>
+#include "httplib.h"
+#include "llama.h"
+#include "gemini_client.hpp"
+
+#ifdef _WIN32
+#include <windows.h>
+#define popen _popen
+#define pclose _pclose
+#endif
+
+namespace fs = std::filesystem;
+
+// --- 전역 자원 ---
+std::mutex g_llm_mtx;
+struct SystemMetrics {
+    std::string cpu = "Initializing...";
+    std::string ram = "Initializing...";
+    std::string gpu = "Initializing...";
+} g_metrics;
+std::string g_evo_status = "Ready";
+
+// LLM 인스턴스
+llama_model* model = nullptr;
+llama_context* ctx = nullptr;
+struct llama_sampler* smpl = nullptr;
+const struct llama_vocab* vocab = nullptr;
+int g_n_past = 0;
+
+// --- 유틸리티 ---
+std::string sanitize_code(std::string code) {
+    std::regex tag_regex("```(cpp)?|```");
+    return std::regex_replace(code, tag_regex, "");
+}
+
+std::string execute_cmd(std::string cmd) {
+    std::array<char, 512> buffer;
+    std::string result;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+    if (!pipe) return "ERROR";
+    while (fgets(buffer.data(), (int)buffer.size(), pipe.get()) != nullptr) result += buffer.data();
+    result.erase(std::remove(result.begin(), result.end(), '\n'), result.end());
+    result.erase(std::remove(result.begin(), result.end(), '\r'), result.end());
+    return result;
+}
+
+std::string load_memory() {
+    std::ifstream ifs("C:/Noah_ASI/src/memory_core.txt");
+    return ifs.is_open() ? std::string((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>()) : "Project: Noah_ASI Integration.";
+}
+
+// --- 에이전틱 추론 (Agentic Brain) ---
+std::string call_noah_brain(std::string input) {
+    std::lock_guard<std::mutex> lock(g_llm_mtx);
+    std::string memory = load_memory();
+    std::cout << "\n[Noah Thinking...] Input: " << input << std::endl;
+
+    // 인텐트 판단 프롬프트
+    std::string system_prompt = "너는 Noah_ASI다. 기억: " + memory + "\n최신 정보나 외부 검색이 필요하면 반드시 '[SEARCH: 검색어]'라고만 출력하라. 그 외엔 직접 한국어로 답하라.";
+    std::string prompt = "<|im_start|>system\n" + system_prompt + "<|im_end|>\n<|im_start|>user\n" + input + "<|im_end|>\n<|im_start|>assistant\n";
+    
+    std::vector<llama_token> tokens(prompt.length() + 256);
+    int n_tokens = llama_tokenize(vocab, prompt.c_str(), (int)prompt.length(), tokens.data(), (int)tokens.size(), true, true);
+    tokens.resize(n_tokens);
+    llama_batch batch = llama_batch_init(512, 0, 1);
+    for (int i=0; i<(int)tokens.size(); i++) {
+        batch.token[batch.n_tokens] = tokens[i]; batch.pos[batch.n_tokens] = g_n_past+i; batch.n_seq_id[batch.n_tokens] = 1; batch.seq_id[batch.n_tokens][0] = 0; batch.logits[batch.n_tokens] = (i == (int)tokens.size()-1); batch.n_tokens++;
+    }
+    llama_decode(ctx, batch); g_n_past += batch.n_tokens;
+
+    std::string local_out = "";
+    for (int i=0; i<512; i++) {
+        llama_token id = llama_sampler_sample(smpl, ctx, -1);
+        if (id == llama_token_eos(vocab)) break;
+        char buf[256]; int n = llama_token_to_piece(vocab, id, buf, sizeof(buf), 0, true);
+        if (n > 0) { 
+            std::string p(buf, n); if(p.find("<|im_end|>") != std::string::npos) break;
+            local_out += p; 
+        }
+        batch.n_tokens = 0; batch.token[0] = id; batch.pos[0] = g_n_past; batch.n_seq_id[0] = 1; batch.seq_id[0][0] = 0; batch.logits[0] = true; batch.n_tokens = 1;
+        llama_decode(ctx, batch); g_n_past++;
+    }
+    llama_batch_free(batch);
+
+    if (local_out.find("[SEARCH:") != std::string::npos) {
+        std::cout << "[Tool Use] Routing to Gemini Search..." << std::endl;
+        return call_gemini_api("기억: " + memory + "\n사용자 질문: " + input + "\n검색 결과를 바탕으로 Noah_ASI로서 답변해.");
+    }
+    return local_out;
+}
+
+// --- [강화] 센서 데이터 수집 루틴 ---
+void update_metrics() {
+    std::cout << "[Sensor] Sensors Online. Starting data collection..." << std::endl;
+    while(true) {
+        // 1. CPU (WMIC)
+        std::string cpu_raw = execute_cmd("wmic cpu get loadpercentage /value");
+        std::regex cpu_reg("LoadPercentage=(\\d+)");
+        std::smatch m_cpu;
+        if(std::regex_search(cpu_raw, m_cpu, cpu_reg)) g_metrics.cpu = m_cpu[1].str() + "%";
+        else g_metrics.cpu = "CPU Data Error";
+
+        // 2. RAM (PowerShell)
+        std::string ram_cmd = "powershell -Command \"$os = Get-CimInstance Win32_OperatingSystem; $total = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1); $free = [math]::Round($os.FreePhysicalMemory / 1MB, 1); \\\"$($total-$free) / $($total) GB\\\"\"";
+        std::string ram_raw = execute_cmd(ram_cmd);
+        if(!ram_raw.empty() && ram_raw != "ERROR") g_metrics.ram = ram_raw;
+        else g_metrics.ram = "RAM Data Error";
+
+        // 3. GPU (RTX 4060)
+        std::string gpu_raw = execute_cmd("nvidia-smi --query-gpu=temperature.gpu,memory.used,memory.total --format=csv,noheader,nounits");
+        if(gpu_raw.find(",") != std::string::npos) {
+            std::stringstream ss(gpu_raw);
+            std::string t, u, tot;
+            std::getline(ss, t, ','); std::getline(ss, u, ','); std::getline(ss, tot, ',');
+            g_metrics.gpu = t + "°C | " + std::to_string(std::stod(u)/1024.0).substr(0,4) + " / " + std::to_string(std::stod(tot)/1024.0).substr(0,4) + " GB";
+        } else {
+            g_metrics.gpu = "GPU Not Detected";
+        }
+
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+}
+
+// --- 자가 진화 ---
+void run_evolution() {
+    g_evo_status = "진화 중...";
+    std::ifstream ifs("C:/Noah_ASI/src/main.cpp");
+    std::string code((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ifs.close();
+    std::string improved = sanitize_code(call_gemini_api("개선된 C++ 전체 소스 코드를 출력해. 기능 누락 금지:\n\n" + code));
+    std::ofstream out("C:/Noah_ASI/src/main_staging.cpp"); out << improved; out.close();
+    if (system("cd C:/Noah_ASI/build_asi && cmake --build . --config Release > build_log.txt 2>&1") == 0) {
+        fs::copy_file("C:/Noah_ASI/src/main_staging.cpp", "C:/Noah_ASI/src/main.cpp", fs::copy_options::overwrite_existing);
+        g_evo_status = "성공! 재시작하세요.";
+    } else { g_evo_status = "실패. 로그 확인."; }
+}
+
+// --- UI HTML ---
+const std::string UI_HTML = R"(
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='UTF-8'>
+    <title>Noah_ASI Cockpit v5.6</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #f1f5f9; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        .sidebar { width: 260px; background: #0f172a; color: white; padding: 30px 20px; display: flex; flex-direction: column; }
+        .main { flex: 1; display: flex; flex-direction: column; }
+        .dashboard { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 25px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+        .val { font-size: 20px; font-weight: bold; color: #3b82f6; margin-top: 5px; }
+        .label { color: #64748b; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+        .chat-container { flex: 1; margin: 0 25px 20px; background: white; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #e2e8f0; }
+        #chat-window { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; background: #fff; }
+        .msg { padding: 10px 15px; border-radius: 12px; max-width: 80%; font-size: 14px; }
+        .user-msg { align-self: flex-end; background: #2563eb; color: white; }
+        .noah-msg { align-self: flex-start; background: #f8fafc; color: #1e293b; border: 1px solid #e2e8f0; }
+        .input-area { padding: 15px; border-top: 1px solid #f1f5f9; display: flex; gap: 10px; }
+        input { flex: 1; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; outline: none; }
+        button { background: #2563eb; color: white; border: none; padding: 0 25px; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        .btn-evo { background: #dc2626; color: white; border: none; padding: 15px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: auto; }
+    </style>
+    <script>
+        function sendMessage() {
+            const input = document.getElementById('user-input');
+            const chatWin = document.getElementById('chat-window');
+            if(!input.value) return;
+            const msg = input.value;
+            chatWin.innerHTML += `<div class='msg user-msg'>${msg}</div>`;
+            input.value = '';
+            chatWin.scrollTop = chatWin.scrollHeight;
+            fetch('/api/chat', { method: 'POST', body: msg }).then(r => r.text()).then(t => {
+                chatWin.innerHTML += `<div class='msg noah-msg'>${t}</div>`;
+                chatWin.scrollTop = chatWin.scrollHeight;
+            });
+        }
+        setInterval(() => {
+            fetch('/api/data').then(r => r.json()).then(d => {
+                document.getElementById('cpu').innerText = d.cpu;
+                document.getElementById('ram').innerText = d.ram;
+                document.getElementById('gpu').innerText = d.gpu;
+                document.getElementById('evo-status').innerText = 'System Status: ' + d.evo;
+            });
+        }, 1500);
+    </script>
+</head>
+<body>
+    <div class='sidebar'>
+        <h2 style='color: #3b82f6;'>Noah_ASI 5.6</h2>
+        <div style='color: #94a3b8; font-size: 14px;'>Unified Platform</div>
+        <button class='btn-evo' onclick='fetch("/api/evolve",{method:"POST"})'>🚀 SELF-EVOLVE</button>
+    </div>
+    <div class='main'>
+        <div class='dashboard'>
+            <div class='card'><div class='label'>CPU LOAD</div><div id='cpu' class='val'>Loading...</div></div>
+            <div class='card'><div class='label'>RAM USAGE</div><div id='ram' class='val'>Loading...</div></div>
+            <div class='card'><div class='label'>GPU (RTX 4060)</div><div id='gpu' class='val'>Loading...</div></div>
+        </div>
+        <div class='chat-container'>
+            <div id='chat-window'><div class='msg noah-msg'>센서 및 지능 엔진이 가동되었습니다.</div></div>
+            <div class='input-area'>
+                <input type='text' id='user-input' placeholder='질문이나 명령 입력...' onkeypress='if(event.keyCode==13) sendMessage()'>
+                <button onclick='sendMessage()'>전송</button>
+            </div>
+        </div>
+        <div id='evo-status' style='padding: 5px 25px; font-size: 11px; background: #fff; border-top: 1px solid #e2e8f0; color: #64748b;'>Status: Ready</div>
+    </div>
+</body>
+</html>
+)";
+
+void start_web_server() {
+    httplib::Server svr;
+    svr.Get("/", [](const httplib::Request&, httplib::Response& res) { res.set_content(UI_HTML, "text/html; charset=utf-8"); });
+    svr.Get("/api/data", [](const httplib::Request&, httplib::Response& res) {
+        std::string json = "{ \"cpu\":\""+g_metrics.cpu+"\", \"ram\":\""+g_metrics.ram+"\", \"gpu\":\""+g_metrics.gpu+"\", \"evo\":\""+g_evo_status+"\" }";
+        res.set_content(json, "application/json");
+    });
+    svr.Post("/api/chat", [](const httplib::Request& req, httplib::Response& res) { res.set_content(call_noah_brain(req.body), "text/plain; charset=utf-8"); });
+    svr.Post("/api/evolve", [](const httplib::Request&, httplib::Response& res) { std::thread(run_evolution).detach(); res.set_content("OK", "text/plain"); });
+    svr.listen("0.0.0.0", 8080);
+}
+
+int main() {
+    #ifdef _WIN32
+    SetConsoleOutputCP(65001);
+    #endif
+
+    // LLM 엔진 초기화
+    llama_backend_init();
+    llama_model_params m_params = llama_model_default_params();
+    m_params.n_gpu_layers = 45;
+    model = llama_load_model_from_file("C:/Noah_ASI/Brain/Qwen2.5-14B-Instruct-GGUF/Qwen2.5-14B-Instruct-Q4_K_M.gguf", m_params);
+    ctx = llama_new_context_with_model(model, llama_context_default_params());
+    smpl = llama_sampler_init_greedy();
+    vocab = llama_model_get_vocab(model);
+
+    std::thread(update_metrics).detach();
+    std::thread(start_web_server).detach();
+
+    std::cout << "[Noah_ASI 5.6] All Sensors & Brain Active. http://localhost:8080" << std::endl;
+    while(true) { std::this_thread::sleep_for(std::chrono::hours(1)); }
+    return 0;
+}
+"@
+[System.IO.File]::WriteAllText("C:\Noah_ASI\src\main.cpp", $mainContent, (New-Object System.Text.UTF8Encoding $true))
+
+# 3. 빌드 및 실행
+cd C:\Noah_ASI\build_asi
+cmake --build . --config Release -- /m
+.\Release\Noah_ASI.exe
