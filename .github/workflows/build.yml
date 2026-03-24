@@ -22,9 +22,12 @@ jobs:
         cd noah_score_app
         flutter pub add http collection intl firebase_core
         flutter pub get
-    - name: 5. 안드로이드 인터넷 권한 주입
+    - name: 5. 안드로이드 필수 설정 (인터넷 권한 및 SDK 버전 21 상향)
       run: |
+        # 1. 인터넷 권한 주입
         sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>' noah_score_app/android/app/src/main/AndroidManifest.xml
+        # 2. Firebase 호환을 위해 최소 안드로이드 버전을 21로 강제 상향
+        sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' noah_score_app/android/app/build.gradle
     - name: 6. APK 최종 컴파일 (Gemini API 키 주입)
       run: |
         cd noah_score_app
