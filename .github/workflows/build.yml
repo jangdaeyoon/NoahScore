@@ -16,12 +16,11 @@ jobs:
     - name: 3. 앱 생성 및 코드 이식
       run: |
         flutter create noah_score_app
-        # 주의: 깃허브 저장소 루트에서 Skills/NoahScore 안의 main.dart를 복사해옵니다.
         cp Skills/NoahScore/main.dart noah_score_app/lib/main.dart
-    - name: 4. 필수 라이브러리 혈관 주입 (http, collection)
+    - name: 4. 필수 라이브러리 혈관 주입 (intl, firebase_core 추가)
       run: |
         cd noah_score_app
-        flutter pub add http collection
+        flutter pub add http collection intl firebase_core
         flutter pub get
     - name: 5. 안드로이드 인터넷 권한 주입
       run: |
@@ -29,7 +28,6 @@ jobs:
     - name: 6. APK 최종 컴파일 (Gemini API 키 주입)
       run: |
         cd noah_score_app
-        # 주인님의 클라우드 지능 키를 빌드할 때 밀어 넣습니다!
         flutter build apk --release --dart-define=GEMINI_API_KEY=${{ secrets.GOOGLE_API_KEY }}
     - name: 7. 결과물 업로드
       uses: actions/upload-artifact@v4
